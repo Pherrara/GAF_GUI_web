@@ -66,12 +66,6 @@ uploaded_velo_meas = st.sidebar.file_uploader(
 )
 
 
-
-
-name_irradiated = st.sidebar.text_input("Prefix for irradiated films:", value="irr")
-name_velo = st.sidebar.text_input("Prefix for unirradiated films:", value="velo")
-image_extension = st.sidebar.text_input("Image extension (e.g., .tif):", value=".tif")
-
 # MU values file uploader
 uploaded_mu_file = st.sidebar.file_uploader(
     "MU values file (MU):",
@@ -167,21 +161,56 @@ if st.sidebar.button("Clear Saved Calibrations"):
 
 
 # --- Functions (from your script, slightly adapted) ---
-def sort_uploaded_files(uploaded_files, name_prefix):
-    """Sort uploaded files by numeric suffix in filename."""
-    if not uploaded_files:
-        return []
+def sort_uploaded_files(uploaded_files):
+    """Sort uploaded files by numeric pattern in filename.
 
-    pattern = re.compile(rf"^{re.escape(name_prefix)}0*(\d+)")
+    Extracts numeric patterns from filenames and sorts accordingly.
+    Returns sorted files and a warning message if ordering seems incorrect.
+    """
+    if not uploaded_files:
+        return [], None
+
+    # Pattern to extract numbers from filename (e.g., "001", "002", etc.)
+    pattern = re.compile(r'(\d+)')
     file_data = []
 
     for file in uploaded_files:
-        match = pattern.match(file.name)
-        if match:
-            file_data.append((file, int(match.group(1))))
+        # Find all numeric sequences in the filename
+        matches = pattern.findall(file.name)
+        if matches:
+            # Use the first numeric sequence found
+            file_data.append((file, int(matches[0])))
+        else:
+            # If no number found, append with a very high number to sort it last
+            file_data.append((file, float('inf')))
 
+    # Sort by extracted number
     file_data.sort(key=lambda x: x[1])
-    return [f[0] for f in file_data]
+    sorted_files = [f[0] for f in file_data]
+
+    # Validate ordering: check if numbers are sequential (001, 002, 003...)
+    warning = None
+    numbers = [x[1] for x in file_data if x[1] != float('inf')]
+
+    if numbers:
+        # Check if we have expected sequential pattern starting from 1 or 0
+        expected_start = 1 if numbers[0] == 1 else 0
+        expected_numbers = list(range(expected_start, expected_start + len(numbers)))
+
+        if numbers != expected_numbers:
+            warning = (f"⚠️ Warning: File numbering may not be sequential. "
+                      f"Expected {expected_start:03d} to {expected_start + len(numbers) - 1:03d}, "
+                      f"but found: {', '.join([f'{n:03d}' for n in numbers])}")
+
+    # Check for files without numbers
+    files_without_numbers = [f[0].name for f in file_data if f[1] == float('inf')]
+    if files_without_numbers:
+        if warning:
+            warning += f"\n⚠️ Files without numeric patterns (placed last): {', '.join(files_without_numbers)}"
+        else:
+            warning = f"⚠️ Files without numeric patterns (placed last): {', '.join(files_without_numbers)}"
+
+    return sorted_files, warning
 
 def load_uploaded_image(uploaded_file):
     """Load an image from an uploaded file object."""
@@ -344,13 +373,13 @@ with st.expander("ℹ️ Show Info About This App"):
     - Works entirely in-browser without relying on local file systems.
 
     **Calibration Requirements**:
-    - Upload numbered image files (e.g., `irr1.tif`, `irr2.tif`, `velo1.tif`, `velo2.tif`)
+    - Upload numbered image files (e.g., `001.tif`, `002.tif`, `003.tif` or `irr001.tif`, `irr002.tif`, etc.)
+    - Files should be numbered sequentially (001, 002, 003...) - the app will warn you if the numbering is not sequential
     - Upload `MU_values.dat` file where each line contains the MU delivered to each film, in order
     - Upload `dcc.dat` file containing the dose conversion coefficient (how much cGy are delivered at the film geometry when using 100 MU)
-    - Set the correct prefixes for irradiated and unirradiated films (default: `irr` and `velo`)
 
     **Measurement Requirements**:
-    - Upload numbered measurement images with the same naming convention
+    - Upload numbered measurement images following the same naming convention
     - Select a calibration source:
       - Upload a calibration.dat file
       - Use a previously saved calibration from this session
@@ -390,17 +419,24 @@ if st.session_state.get("run_calibration", False):
 
     st.success("Running calibration pipeline...")
 
-    # Sort uploaded files by numeric suffix
-    irradiated_list = sort_uploaded_files(uploaded_irradiated_calib, name_irradiated)
-    velo_list = sort_uploaded_files(uploaded_velo_calib, name_velo)
+    # Sort uploaded files by numeric pattern in filename
+    irradiated_list, irr_warning = sort_uploaded_files(uploaded_irradiated_calib)
+    velo_list, velo_warning = sort_uploaded_files(uploaded_velo_calib)
+
+    # Display warnings if file ordering is not as expected
+    if irr_warning:
+        st.warning(f"**Irradiated files:** {irr_warning}")
+
+    if velo_warning:
+        st.warning(f"**Unirradiated files:** {velo_warning}")
 
     if len(irradiated_list) == 0:
-        st.error(f"❌ No irradiated images found with prefix `{name_irradiated}`.")
+        st.error(f"❌ No irradiated images found.")
         st.write("Uploaded irradiated files:", [f.name for f in uploaded_irradiated_calib])
         st.stop()
 
     if len(velo_list) == 0:
-        st.error(f"❌ No unirradiated (velo) images found with prefix `{name_velo}`.")
+        st.error(f"❌ No unirradiated (velo) images found.")
         st.write("Uploaded unirradiated files:", [f.name for f in uploaded_velo_calib])
         st.stop()
 
@@ -753,17 +789,24 @@ if st.button("Make Measurement"):
 if st.session_state.get("make_measurement", False):
     st.success("Running measurement pipeline...")
 
-    # Sort uploaded files by numeric suffix
-    irradiated_list = sort_uploaded_files(uploaded_irradiated_meas, name_irradiated)
-    velo_list = sort_uploaded_files(uploaded_velo_meas, name_velo)
+    # Sort uploaded files by numeric pattern in filename
+    irradiated_list, irr_warning = sort_uploaded_files(uploaded_irradiated_meas)
+    velo_list, velo_warning = sort_uploaded_files(uploaded_velo_meas)
+
+    # Display warnings if file ordering is not as expected
+    if irr_warning:
+        st.warning(f"**Irradiated measurement files:** {irr_warning}")
+
+    if velo_warning:
+        st.warning(f"**Unirradiated measurement files:** {velo_warning}")
 
     if len(irradiated_list) == 0:
-        st.error(f"❌ No irradiated images found with prefix `{name_irradiated}`.")
+        st.error(f"❌ No irradiated images found.")
         st.write("Uploaded irradiated files:", [f.name for f in uploaded_irradiated_meas])
         st.stop()
 
     if len(velo_list) == 0:
-        st.error(f"❌ No unirradiated (velo) images found with prefix `{name_velo}`.")
+        st.error(f"❌ No unirradiated (velo) images found.")
         st.write("Uploaded unirradiated files:", [f.name for f in uploaded_velo_meas])
         st.stop()
 
@@ -851,7 +894,7 @@ if st.session_state.get("make_measurement", False):
 st.markdown(
     """
     <div style='text-align: right; font-size: 0.85em; color: gray; margin-top: 2em;'>
-        Developed by A. M. Ferrara - alessandromichele.ferrara@gmail.com &nbsp;|&nbsp; v1.2.1 Aug 2025
+        Developed by A. M. Ferrara - alessandromichele.ferrara@gmail.com &nbsp;|&nbsp; v1.3.1 Nov 2025
     </div>
     """,
     unsafe_allow_html=True
